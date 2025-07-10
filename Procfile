@@ -1,0 +1,1 @@
+web: streamlit run crop_poverty_analysis.py --server.port=$PORT --server.address=0.0.0.0 
