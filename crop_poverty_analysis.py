@@ -16,8 +16,8 @@ def load_and_prepare_data(selected_year=2):
         'data_cleaned.csv',  # Current directory
         '/Users/rtv-lpt-129/Desktop/quantities/data_cleaned.csv',  # Absolute path
         'datasets/cleaned/data_cleaned.csv', 
-        '/Users/rtv-lpt-129/Desktop/Data_Preprocessing/workmate-data/datasets/cleaned/data_cleaned.csv',
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'datasets/cleaned/data_cleaned.csv') 
+        '/Users/rtv-lpt-129/Desktop/quantities/data_cleaned.csv',
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), '/data_cleaned.csv') 
     ]
     
     # Try to load the data from any of the paths
@@ -165,14 +165,14 @@ def load_model(selected_year=2):
     model_paths = [
         f'random_forest_model_{selected_year}.pkl',  # Current directory
         f'/Users/rtv-lpt-129/Desktop/quantities/random_forest_model_{selected_year}.pkl',  # Absolute path
-        f'/Users/rtv-lpt-129/Desktop/Data_Preprocessing/workmate-data/random_forest_model_{selected_year}.pkl', 
+        f'/Users/rtv-lpt-129/Desktop/quantities/random_forest_model_{selected_year}.pkl', 
         os.path.join(os.path.dirname(os.path.abspath(__file__)), f'random_forest_model_{selected_year}.pkl')
     ]
     
     scaler_paths = [
         f'scaler_{selected_year}.pkl',  # Current directory
         f'/Users/rtv-lpt-129/Desktop/quantities/scaler_{selected_year}.pkl',  # Absolute path
-        f'/Users/rtv-lpt-129/Desktop/Data_Preprocessing/workmate-data/scaler_{selected_year}.pkl', 
+        f'/Users/rtv-lpt-129/Desktop/quantities/scaler_{selected_year}.pkl', 
         os.path.join(os.path.dirname(os.path.abspath(__file__)), f'scaler_{selected_year}.pkl')
     ]
     
@@ -996,7 +996,7 @@ def main():
             importance_df = pd.DataFrame({
                 'Feature': list(importance_dict.keys()),
                 'Importance': list(importance_dict.values())
-            }).sort_values('Importance', ascending=False).head(6)
+            }).sort_values('Importance', ascending=False).head(5)
             
             # st.subheader("Top Feature Importance")
             fig_importance = px.bar(
@@ -1053,11 +1053,11 @@ def main():
                     viable_crop_qtys = crop_values[viable_mask]
                     min_viable_crop = viable_crop_qtys.min()
                     
-                    st.write(f"**✅ Minimum Viable Crop Quantity (≥50% Risk escape probability):**")
+                    st.write(f"** Minimum Viable Crop Quantity (≥50% Risk escape probability):**")
                     st.write(f"• **{min_viable_crop:.0f} {get_crop_unit(selected_crop)}** of {format_crop_name(selected_crop)}")
                     st.write(f"• With current household characteristics")
                 else:
-                    st.write("**❌ No crop quantity reaches 50% Risk escape probability for this household profile**")
+                    st.write("** No crop quantity reaches 50% Risk escape probability for this household profile**")
                 
                 # Show impact of household characteristics
                 st.write("**Household Characteristics Impact:**")
@@ -1108,50 +1108,115 @@ def main():
         else:
             st.error("Failed to generate the single land size analysis plot.")
 
-    # Add separator
     st.markdown("---")
 
-    # Generate one-way PDP for crop quantity
-    with st.spinner("Generating crop quantity PDP..."):
-        crop_pdp_result = create_one_way_pdp(
-            model, scaler, feature_names, selected_crop, baseline_features,
-            crop_qty_range, n_points=100
-        )
-        
-        if crop_pdp_result is not None and len(crop_pdp_result) == 2:
-            crop_values_pdp, predictions_pdp = crop_pdp_result
+    # One-way Partial Dependence Plot using sklearn
+    st.subheader("One-Way Partial Dependence Plot")
+
+    # Generate one-way PDP using sklearn
+    with st.spinner("Generating one-way PDP"):
+        try:
+            from sklearn.inspection import partial_dependence
             
-            # Create the PDP plot - cleaner sklearn-style
-            fig_pdp = go.Figure()
+            # Prepare the data for PDP
+            X = data.drop(columns=['progress_status'])
+            y = data['progress_status']
             
-            fig_pdp.add_trace(go.Scatter(
-                x=crop_values_pdp,
-                y=predictions_pdp,
-                mode='lines',
-                name='Partial Dependence',
-                line=dict(color='#1f77b4', width=3),
-                hovertemplate=f'<b>{format_crop_name(selected_crop)}:</b> %{{x:.0f}} {get_crop_unit(selected_crop)}<br>' +
-                            '<b>Risk Escape Probability:</b> %{y:.1%}<extra></extra>'
-            ))
+            # Get the feature index for the selected crop
+            if selected_crop in X.columns:
+                feature_idx = X.columns.get_loc(selected_crop)
                 
-            fig_pdp.update_layout(
-                title=f"Partial Dependence Plot: {format_crop_name(selected_crop)} → Risk Escape Probability",
-                xaxis_title=f"{format_crop_name(selected_crop)} ({get_crop_unit(selected_crop)})",
-                yaxis_title="Risk Escape Probability",
-                height=500,
-                yaxis=dict(range=[0, 1], tickformat='.0%', showgrid=True, gridcolor='lightgray'),
-                showlegend=False,
-                plot_bgcolor='white',
-                xaxis=dict(showgrid=True, gridcolor='lightgray')
-            )
+                # Calculate partial dependence using sklearn - this shows relationship with target
+                pdp_result = partial_dependence(
+                    model, 
+                    X=X, 
+                    features=[feature_idx],
+                    grid_resolution=50
+                )
+                
+                # Extract results - sklearn returns a Bunch object with 'average' and 'grid_values'
+                if hasattr(pdp_result, 'average') and hasattr(pdp_result, 'grid_values'):
+                    # Modern sklearn (1.0+)
+                    pdp_values = pdp_result.average[0]
+                    feature_values = pdp_result.grid_values[0]
+                elif isinstance(pdp_result, tuple) and len(pdp_result) >= 2:
+                    # Older sklearn versions return tuple
+                    pdp_values = pdp_result[0][0]
+                    feature_values = pdp_result[1][0]
+                else:
+                    raise ValueError("Unknown sklearn partial_dependence return format")
+                
+                # Convert to numpy arrays
+                pdp_values = np.array(pdp_values)
+                feature_values = np.array(feature_values)
+                
+                # Create the PDP plot - sklearn style
+                fig_pdp = go.Figure()
+                
+                # Add the main PDP line
+                fig_pdp.add_trace(go.Scatter(
+                    x=feature_values,
+                    y=pdp_values,
+                    mode='lines',
+                    name='',
+                    line=dict(color='green', width=3),
+                    hovertemplate=f'<b>{format_crop_name(selected_crop)}:</b> %{{x:.1f}}<br>' +
+                                '<b>Partial dependence:</b> %{y:.4f}<extra></extra>'
+                ))
+                
+                fig_pdp.update_layout(
+                    title=f"Partial dependence of '{format_crop_name(selected_crop)}'",
+                    xaxis_title=f"{format_crop_name(selected_crop)} ({get_crop_unit(selected_crop)})",
+                    yaxis_title="Partial dependence",
+                    height=400,
+                    width=600,
+                    showlegend=False,
+                    plot_bgcolor='white',
+                    xaxis=dict(
+                        showgrid=True, 
+                        gridcolor='lightgray',
+                        linecolor='black',
+                        mirror=True
+                    ),
+                    yaxis=dict(
+                        showgrid=True, 
+                        gridcolor='lightgray',
+                        linecolor='black',
+                        mirror=True
+                    ),
+                    font=dict(size=12)
+                )
+                
+                # Display the plot centered
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    st.plotly_chart(fig_pdp, use_container_width=False)
+                
+                # Add interpretation
+
+                 
+            else:
+                st.error(f"Feature '{selected_crop}' not found in dataset columns")
+                
+        except Exception as e:
+            st.error(f"Failed to generate sklearn PDP: {str(e)}")
+            st.write("**Error details:**", str(e))
             
-            # Display the PDP plot
-            col1, col2, col3 = st.columns([1, 2, 2])
-            with col2:
-                st.plotly_chart(fig_pdp, use_container_width=True)
-        
-        else:
-            st.error("Failed to generate crop quantity PDP.")
+            # Simple fallback: Show actual data relationship
+            if selected_crop in data.columns:
+                st.write("**Fallback: Showing actual data relationship**")
+                fig_fallback = px.scatter(
+                    data, 
+                    x=selected_crop, 
+                    y='progress_status',
+                    color='progress_status',
+                    title=f"Actual Data: {format_crop_name(selected_crop)} vs Risk Status",
+                    labels={
+                        selected_crop: f"{format_crop_name(selected_crop)} ({get_crop_unit(selected_crop)})",
+                        'progress_status': 'Risk Status (0=Below, 1=Above)'
+                    }
+                )
+                st.plotly_chart(fig_fallback, use_container_width=True)
 
 
 if __name__ == "__main__":
